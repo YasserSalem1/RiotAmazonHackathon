@@ -8,11 +8,17 @@ type RiotParticipant = {
 };
 type RiotMatch = { metadata: { matchId: string }, info: { participants: RiotParticipant[], gameDuration: number } };
 type Timeline = { info: { frames: Array<{ participantFrames: Record<string, { position?: {x:number,y:number} }> }> } };
+type Region = "europe" | "americas" | "asia";
 
 const MAP_MAX = 14870;
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return typeof error === "string" ? error : "Unexpected error";
+}
+
 export default function Client() {
-  const [region, setRegion] = useState<"europe"|"americas"|"asia">("europe"); // visual for now
+  const [region, setRegion] = useState<Region>("europe"); // visual for now
   const [query, setQuery] = useState("");
   const [puuid, setPuuid] = useState<string | null>(null);
   const [matches, setMatches] = useState<string[]>([]);
@@ -42,8 +48,9 @@ export default function Client() {
       setPuuid(acc.puuid);
       const ids: string[] = await fetch(`/api/matches?puuid=${encodeURIComponent(acc.puuid)}&count=10`, { cache: "no-store" }).then(r => r.json());
       setMatches(ids || []);
-    } catch (e:any) {
-      setErr(e.message || "Lookup failed");
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setErr(message || "Lookup failed");
     } finally { setLoading(false); }
   }
 
@@ -55,8 +62,9 @@ export default function Client() {
       const data = await res.json();
       if (data?.info && data?.metadata) setSelected({ match: data });
       else setSelected({ match: data.match, timeline: data.timeline });
-    } catch (e:any) {
-      setErr(e.message || "Failed to fetch match");
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setErr(message || "Failed to fetch match");
     } finally { setLoading(false); }
   }
 
@@ -85,7 +93,12 @@ export default function Client() {
                 <div className="text-sm font-semibold text-white/90">Region</div>
                 <select
                   value={region}
-                  onChange={e => setRegion(e.target.value as any)}
+                  onChange={event => {
+                    const value = event.target.value;
+                    if (value === "europe" || value === "americas" || value === "asia") {
+                      setRegion(value);
+                    }
+                  }}
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
                 >
                   <option value="europe">Europe West</option>
