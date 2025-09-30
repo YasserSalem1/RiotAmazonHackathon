@@ -3,102 +3,151 @@
 import { useMemo, useState } from "react";
 
 type RiotParticipant = {
-  puuid: string; championName: string; kills: number; deaths: number; assists: number;
-  teamId: number; participantId: number;
+  puuid: string;
+  championName: string;
+  kills: number;
+  deaths: number;
+  assists: number;
+  teamId: number;
+  participantId: number;
 };
-type RiotMatch = { metadata: { matchId: string }, info: { participants: RiotParticipant[], gameDuration: number } };
-type Timeline = { info: { frames: Array<{ participantFrames: Record<string, { position?: {x:number,y:number} }> }> } };
-type Region = "europe" | "americas" | "asia";
+type RiotMatch = {
+  metadata: { matchId: string };
+  info: { participants: RiotParticipant[]; gameDuration: number };
+};
+type Timeline = {
+  info: {
+    frames: Array<{
+      participantFrames: Record<string, { position?: { x: number; y: number } }>;
+    }>;
+  };
+};
+type MatchBundle = { match: RiotMatch; timeline?: Timeline };
+
+function isRiotMatch(x: unknown): x is RiotMatch {
+  const m = x as RiotMatch;
+  return !!m && typeof m === "object" && "metadata" in m && "info" in m;
+}
+function isMatchBundle(x: unknown): x is MatchBundle {
+  const b = x as MatchBundle;
+  return !!b && typeof b === "object" && "match" in b;
+}
 
 const MAP_MAX = 14870;
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return typeof error === "string" ? error : "Unexpected error";
-}
-
 export default function Client() {
-  const [region, setRegion] = useState<Region>("europe"); // visual for now
-  const [query, setQuery] = useState("");
+  const [region, setRegion] = useState<"europe" | "americas" | "asia">("europe"); // visual only for now
+  const [gameName, setGameName] = useState("");
+  const [tagLine, setTagLine] = useState("");
+
   const [puuid, setPuuid] = useState<string | null>(null);
   const [matches, setMatches] = useState<string[]>([]);
-  const [selected, setSelected] = useState<{ match: RiotMatch; timeline?: Timeline } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<MatchBundle | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function onSearch() {
-    setErr(null); setMatches([]); setSelected(null); setSelectedId(null);
+    setErr(null);
+    setMatches([]);
+    setSelected(null);
+    setSelectedId(null);
 
-    const v = query.trim();
-    if (!v) return;
+    const name = gameName.trim();
+    const tagRaw = tagLine.trim().replace(/^#/, ""); // strip leading '#'
+    const tag = tagRaw.toUpperCase();
 
-    // direct match id (EUW1_####…)
-    if (/^[A-Z0-9]+_\d+$/.test(v)) {
-      await openMatch(v);
+    if (!name) {
+      setErr("Please enter your Game name.");
       return;
     }
 
-    // Riot ID "Name#TAG"
-    if (!v.includes("#")) { setErr('Use Riot ID as Name#TAG or a matchId like EUW1_123…'); return; }
+    // If user pasted a direct match ID into the name box, open it
+    if (/^[A-Z0-9]+_\d+$/.test(name)) {
+      await openMatch(name);
+      return;
+    }
+
+    if (!tag) {
+      setErr("Please enter your Tag (e.g., RANK).");
+      return;
+    }
+
     try {
       setLoading(true);
-      const acc = await fetch(`/api/puuid?riotId=${encodeURIComponent(v)}`, { cache: "no-store" }).then(r => r.json());
-      if (!acc?.puuid) throw new Error("Could not resolve Riot ID");
+
+      // EXACTLY like your curl: /account?gameName=...&tagLine=...
+      const accRes = await fetch(
+        `/api/puuid?gameName=${encodeURIComponent(name)}&tagLine=${encodeURIComponent(tag)}`,
+        { cache: "no-store" }
+      );
+      const acc = (await accRes.json()) as { puuid?: string; error?: unknown };
+      if (!accRes.ok || !acc?.puuid) {
+        throw new Error("Could not resolve ID. Check name and tag.");
+      }
       setPuuid(acc.puuid);
-      const ids: string[] = await fetch(`/api/matches?puuid=${encodeURIComponent(acc.puuid)}&count=10`, { cache: "no-store" }).then(r => r.json());
-      setMatches(ids || []);
-    } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setErr(message || "Lookup failed");
-    } finally { setLoading(false); }
+
+      const listRes = await fetch(`/api/matches?puuid=${encodeURIComponent(acc.puuid)}&count=10`, {
+        cache: "no-store",
+      });
+      const ids = (await listRes.json()) as unknown;
+      if (!Array.isArray(ids)) {
+        throw new Error("Failed to fetch recent matches.");
+      }
+      setMatches(ids as string[]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Lookup failed";
+      setErr(msg);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function openMatch(id: string) {
-    setSelectedId(id); setSelected(null); setErr(null);
+    setSelectedId(id);
+    setSelected(null);
+    setErr(null);
     try {
       setLoading(true);
       const res = await fetch(`/api/match?matchId=${encodeURIComponent(id)}&timeline=1`, { cache: "no-store" });
-      const data = await res.json();
-      if (data?.info && data?.metadata) setSelected({ match: data });
-      else setSelected({ match: data.match, timeline: data.timeline });
-    } catch (error: unknown) {
-      const message = getErrorMessage(error);
-      setErr(message || "Failed to fetch match");
-    } finally { setLoading(false); }
+      const raw = (await res.json()) as unknown;
+      if (isRiotMatch(raw)) setSelected({ match: raw });
+      else if (isMatchBundle(raw)) setSelected(raw);
+      else throw new Error("Unexpected match response.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to fetch match.";
+      setErr(msg);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <main className="mx-auto grid max-w-6xl gap-10">
-      {/* HERO (centered, slightly up) */}
+      {/* HERO */}
       <section className="flex min-h-[72vh] items-center justify-center -mt-10">
-        <div className="w-full">
-          <div className="mb-8 text-center">
-            <h1 className="text-5xl font-black tracking-tight sm:text-6xl">
-              <span className="bg-gradient-to-r from-sky-400 to-cyan-300 bg-clip-text text-transparent">
-                AI League Coach
-              </span>
-            </h1>
-            <p className="mx-auto mt-4 max-w-2xl text-base text-slate-300 sm:text-lg">
-              Enter <span className="text-sky-300">Riot ID</span> <code className="text-sky-400">Name#TAG</code> or a{" "}
-              <span className="text-cyan-300">Match ID</span>. We’ll fetch your last 10 games and break one down.
-            </p>
-          </div>
+        <div className="w-full text-center">
+          <h1 className="text-5xl font-black tracking-tight sm:text-6xl">
+            <span className="bg-gradient-to-r from-sky-400 to-cyan-300 bg-clip-text text-transparent">
+              AI League Coach
+            </span>
+          </h1>
+          <p className="mx-auto mt-4 max-w-2xl text-base text-slate-300 sm:text-lg">
+            Enter Riot <span className="text-sky-300">Game name</span> and{" "}
+            <span className="text-cyan-300">#Tag</span>, or paste a Match ID. We’ll fetch your last 10 games and break
+            one down.
+          </p>
 
-          {/* Pill search bar */}
-          <div className="mx-auto w-full max-w-4xl rounded-full border border-white/10 bg-[#191c25]/90 p-2 shadow-2xl backdrop-blur">
+          {/* Pill search */}
+          <div className="mx-auto mt-6 w-full max-w-4xl rounded-full border border-white/10 bg-[#191c25]/90 p-2 shadow-2xl backdrop-blur">
             <div className="flex items-center gap-4 px-4 py-2">
-              {/* Region (visual only) */}
-              <div className="flex min-w-[180px] items-center gap-3">
+              {/* Region (visual) */}
+              <div className="flex min-w-[180px] items-center gap-3 text-left">
                 <div className="text-sm font-semibold text-white/90">Region</div>
                 <select
                   value={region}
-                  onChange={event => {
-                    const value = event.target.value;
-                    if (value === "europe" || value === "americas" || value === "asia") {
-                      setRegion(value);
-                    }
-                  }}
+                  onChange={(e) => setRegion(e.target.value as "europe" | "americas" | "asia")}
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none"
                 >
                   <option value="europe">Europe West</option>
@@ -109,15 +158,23 @@ export default function Client() {
 
               <div className="h-6 w-px bg-white/10" />
 
-              {/* Search */}
+              {/* Two inputs: Game name + #Tag */}
               <div className="flex w-full items-center gap-3">
                 <div className="min-w-[72px] text-sm font-semibold text-white/90">Search</div>
                 <input
                   className="h-12 w-full rounded-xl border border-white/10 bg-white/5 px-4 text-base text-white outline-none placeholder:text-slate-400"
-                  placeholder='Game name + #TAG (e.g., YasserSalem#RANK) or matchId "EUW1_123..."'
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && onSearch()}
+                  placeholder='Game name (e.g., "YasserSalem" or paste "EUW1_123...")'
+                  value={gameName}
+                  onChange={(e) => setGameName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && onSearch()}
+                />
+                <div className="text-xl text-slate-400">#</div>
+                <input
+                  className="h-12 w-40 rounded-xl border border-white/10 bg-white/5 px-3 text-base text-white outline-none placeholder:text-slate-400"
+                  placeholder="RANK"
+                  value={tagLine}
+                  onChange={(e) => setTagLine(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && onSearch()}
                 />
                 <button
                   onClick={onSearch}
@@ -131,7 +188,7 @@ export default function Client() {
             </div>
           </div>
 
-          {err && <p className="mx-auto mt-4 max-w-4xl text-center text-sm text-rose-300">{err}</p>}
+          {err && <p className="mx-auto mt-3 max-w-4xl text-center text-sm text-rose-300">{err}</p>}
         </div>
       </section>
 
@@ -143,14 +200,18 @@ export default function Client() {
             <span className="text-sm text-slate-400">{matches.length} games</span>
           </div>
           <ul className="grid gap-3 sm:grid-cols-2">
-            {matches.map(id => (
-              <li key={id}
-                  className={`flex items-center justify-between rounded-xl border p-4 transition-colors ${
-                    selectedId === id ? "border-sky-500/60 bg-sky-500/5" : "border-white/10 bg-white/5 hover:bg-white/10"
-                  }`}>
+            {matches.map((id) => (
+              <li
+                key={id}
+                className={`flex items-center justify-between rounded-xl border p-4 transition-colors ${
+                  selectedId === id ? "border-sky-500/60 bg-sky-500/5" : "border-white/10 bg-white/5 hover:bg-white/10"
+                }`}
+              >
                 <span className="truncate text-sm">{id}</span>
-                <button onClick={() => openMatch(id)}
-                        className="rounded-lg border border-white/10 bg-white/10 px-3 py-1 text-sm hover:bg-white/20">
+                <button
+                  onClick={() => openMatch(id)}
+                  className="rounded-lg border border-white/10 bg-white/10 px-3 py-1 text-sm hover:bg-white/20"
+                >
                   Open
                 </button>
               </li>
@@ -165,9 +226,14 @@ export default function Client() {
   );
 }
 
-function MatchDetail({ data, puuid }: { data: { match: RiotMatch; timeline?: Timeline }, puuid: string | null }) {
+function MatchDetail({ data, puuid }: { data: MatchBundle; puuid: string | null }) {
   const parts = data.match.info.participants;
-  const me = useMemo(() => (puuid ? parts.find(p => p.puuid === puuid) || null : null), [parts, puuid]);
+
+  const me = useMemo(() => {
+    if (!puuid) return null;
+    return parts.find((p) => p.puuid === puuid) || null;
+  }, [parts, puuid]);
+
   const kda = me ? `${me.kills}/${me.deaths}/${me.assists}` : "—";
   const champ = me ? me.championName : "—";
 
@@ -175,7 +241,7 @@ function MatchDetail({ data, puuid }: { data: { match: RiotMatch; timeline?: Tim
     if (!data.timeline || !me) return [];
     const frames = data.timeline.info?.frames ?? [];
     const pid = me.participantId;
-    const pts: {x:number;y:number}[] = [];
+    const pts: { x: number; y: number }[] = [];
     for (const f of frames) {
       const pos = f?.participantFrames?.[String(pid)]?.position;
       if (pos?.x != null && pos?.y != null) pts.push({ x: pos.x, y: pos.y });
@@ -198,16 +264,20 @@ function MatchDetail({ data, puuid }: { data: { match: RiotMatch; timeline?: Tim
           <Heatmap points={points} width={560} height={560} />
         </div>
         <div className="grid gap-3 md:col-span-2">
-          {[100,200].map(team => (
+          {[100, 200].map((team) => (
             <div key={team} className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <div className="mb-2 text-sm font-semibold">{team===100 ? "Blue Team" : "Red Team"}</div>
+              <div className="mb-2 text-sm font-semibold">{team === 100 ? "Blue Team" : "Red Team"}</div>
               <ul className="space-y-2 text-sm">
-                {parts.filter(p => p.teamId===team).map(p => (
-                  <li key={p.puuid} className="flex justify-between">
-                    <span className="font-medium">{p.championName}</span>
-                    <span className="text-slate-400">{p.kills}/{p.deaths}/{p.assists}</span>
-                  </li>
-                ))}
+                {parts
+                  .filter((p) => p.teamId === team)
+                  .map((p) => (
+                    <li key={p.puuid} className="flex justify-between">
+                      <span className="font-medium">{p.championName}</span>
+                      <span className="text-slate-400">
+                        {p.kills}/{p.deaths}/{p.assists}
+                      </span>
+                    </li>
+                  ))}
               </ul>
             </div>
           ))}
@@ -217,7 +287,7 @@ function MatchDetail({ data, puuid }: { data: { match: RiotMatch; timeline?: Tim
   );
 }
 
-function Info({label, value}:{label:string; value:string}) {
+function Info({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
       <div className="text-[10px] uppercase tracking-wider text-slate-400">{label}</div>
@@ -226,8 +296,16 @@ function Info({label, value}:{label:string; value:string}) {
   );
 }
 
-function Heatmap({ points, width=560, height=560 }:{ points:{x:number;y:number}[]; width?:number; height?:number }) {
-  const circles = points.map((p,i)=>{
+function Heatmap({
+  points,
+  width = 560,
+  height = 560,
+}: {
+  points: { x: number; y: number }[];
+  width?: number;
+  height?: number;
+}) {
+  const circles = points.map((p, i) => {
     const px = (p.x / MAP_MAX) * width;
     const py = height - (p.y / MAP_MAX) * height;
     return <circle key={i} cx={px} cy={py} r="9" fill="url(#g)" opacity="0.28" />;
