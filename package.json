@@ -45,15 +45,26 @@
           "recharts": "^2.15.2",
           "sonner": "^2.0.3",
           "tailwind-merge": "*",
-          "vaul": "^1.1.2"
+          "vaul": "^1.1.2",
+          "next": "15.5.4"
       },
       "devDependencies": {
           "@types/node": "^20.10.0",
           "@vitejs/plugin-react-swc": "^3.10.2",
-          "vite": "6.3.5"
+          "vite": "6.3.5",
+          "typescript": "^5",
+
+            "@tailwindcss/postcss": "^4",
+            "tailwindcss": "^4",
+            "eslint": "^9",
+            "eslint-config-next": "15.5.4",
+            "@eslint/eslintrc": "^3"
       },
       "scripts": {
-          "dev": "vite",
-          "build": "vite build"
+        
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
+    "start": "next start",
+    "lint": "eslint"
       }
   }
